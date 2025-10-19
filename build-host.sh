@@ -16,4 +16,4 @@ export LDFLAGS="$FC_LDFLAGS ${FT_LDFLAGS} ${SDL2_LDFLAGS} ${CURL_LDFLAGS}"
 export CXXFLAGS="$CXXFLAGS -fsanitize=address -fno-omit-frame-pointer"
 export LDFLAGS="$LDFLAGS -fsanitize=address -fno-omit-frame-pointer"
 
-make -j8
+make -j16

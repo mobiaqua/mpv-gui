@@ -1,5 +1,5 @@
 
-NUC=${NUC:=0}
+NUC=${NUC:=1}
 
 SYSROOT_NATIVE=$(readlink -f "sysroot-native")
 
