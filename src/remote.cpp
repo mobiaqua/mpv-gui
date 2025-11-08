@@ -56,6 +56,7 @@ enum remoteType {
 };
 
 static enum remoteType remote;
+static const char *remoteMac;
 
 struct mapping {
 	int linuxKeycode;
@@ -132,6 +133,11 @@ static int scanRemote() {
 
 		if (ioctl(fd, EVIOCGID, &id) != -1 && id.bustype == BUS_BLUETOOTH) {
 			if (id.vendor == USB_VENDOR_PS3REMOTE && id.product == USB_DEVICE_PS3REMOTE) {
+				if (remoteMac && ioctl(fd, EVIOCGUNIQ(sizeof(device_name) - 1), &device_name) > 0) {
+					if (strncasecmp(device_name, remoteMac, sizeof(device_name)) != 0) {
+						continue;
+					}
+				}
 				remote = REMOTE_PS3_BD;
 				return fd;
 			}
@@ -219,9 +225,11 @@ exit:
 	return NULL;
 }
 
-int RemoteInit() {
+int RemoteInit(const char *macAddress) {
 	threadExit = 0;
 	threadExited = 0;
+
+	remoteMac = macAddress;
 
 	if (pipe(threadPriv.fd) != 0) {
 		return -1;
@@ -293,7 +301,7 @@ int RemoteRead() {
 
 namespace MpvGui {
 
-int RemoteInit() {
+int RemoteInit(const char *macAddress) {
 	return 0;
 }
 

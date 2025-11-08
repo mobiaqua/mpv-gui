@@ -49,7 +49,7 @@ public:
 	DisplaySdl2();
 	~DisplaySdl2();
 
-	STATUS init();
+	STATUS init(const char *connectorPrimaryId, const char *connectorSecondaryId);
 	STATUS deinit();
 	void *getBufferPtr();
 	U32 getBufferWidth();

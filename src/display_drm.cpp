@@ -24,6 +24,7 @@
 #include "display_drm.h"
 
 #include <stddef.h>
+#include <cstdio>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -35,6 +36,32 @@
 #include "logs.h"
 
 namespace MpvGui {
+
+static const char *connectorNames[] = {
+	"Unknown",   // DRM_MODE_CONNECTOR_Unknown
+	"VGA",       // DRM_MODE_CONNECTOR_VGA
+	"DVI-I",     // DRM_MODE_CONNECTOR_DVII
+	"DVI-D",     // DRM_MODE_CONNECTOR_DVID
+	"DVI-A",     // DRM_MODE_CONNECTOR_DVIA
+	"Composite", // DRM_MODE_CONNECTOR_Composite
+	"SVIDEO",    // DRM_MODE_CONNECTOR_SVIDEO
+	"LVDS",      // DRM_MODE_CONNECTOR_LVDS
+	"Component", // DRM_MODE_CONNECTOR_Component
+	"DIN",       // DRM_MODE_CONNECTOR_9PinDIN
+	"DP",        // DRM_MODE_CONNECTOR_DisplayPort
+	"HDMI-A",    // DRM_MODE_CONNECTOR_HDMIA
+	"HDMI-B",    // DRM_MODE_CONNECTOR_HDMIB
+	"TV",        // DRM_MODE_CONNECTOR_TV
+	"eDP",       // DRM_MODE_CONNECTOR_eDP
+	"Virtual",   // DRM_MODE_CONNECTOR_VIRTUAL
+	"DSI",       // DRM_MODE_CONNECTOR_DSI
+	"DPI",       // DRM_MODE_CONNECTOR_DPI
+	"Writeback", // DRM_MODE_CONNECTOR_WRITEBACK
+	"SPI",       // DRM_MODE_CONNECTOR_SPI
+	"USB",       // DRM_MODE_CONNECTOR_USB
+};
+
+#define MAX_CONNECTOR_NAME_LEN 20
 
 DisplayDrm::DisplayDrm() :
 		_fd(-1), _drmResources(nullptr),
@@ -48,11 +75,11 @@ DisplayDrm::~DisplayDrm() {
 	deinit();
 }
 
-STATUS DisplayDrm::init() {
+STATUS DisplayDrm::init(const char *connectorPrimaryId, const char *connectorSecondaryId) {
 	if (_initialized)
 		return S_FAIL;
 
-	if (internalInit() == S_FAIL)
+	if (internalInit(connectorPrimaryId, connectorSecondaryId) == S_FAIL)
 		return S_FAIL;
 
 	return S_OK;
@@ -102,7 +129,7 @@ static void drm_page_flip(int fd, unsigned int msc, unsigned int sec,
 	display->_waitingForFlip = false;
 }
 
-STATUS DisplayDrm::internalInit() {
+STATUS DisplayDrm::internalInit(const char *connectorPrimaryId, const char *connectorSecondaryId) {
 	drmDevice *devices[DRM_MAX_MINOR] = { 0 };
 	uint32_t handles[4] = { 0 }, pitches[4] = { 0 }, offsets[4] = { 0 };
 	struct drm_mode_create_dumb creq = { 0 };
@@ -143,6 +170,17 @@ STATUS DisplayDrm::internalInit() {
 		connector = drmModeGetConnector(_fd, _drmResources->connectors[i]);
 		if (connector == nullptr)
 			continue;
+		if (connectorPrimaryId) {
+			char connectorName[MAX_CONNECTOR_NAME_LEN];
+			snprintf(connectorName, MAX_CONNECTOR_NAME_LEN, "%s-%d", connectorNames[connector->connector_type], connector->connector_type_id);
+			if (strcmp(connectorName, connectorPrimaryId) == 0) {
+				if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
+					_connectorId = connector->connector_id;
+					break;
+				}
+				continue;
+			}
+		}
 		if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
 			_connectorId = connector->connector_id;
 			break;

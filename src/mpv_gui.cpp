@@ -34,7 +34,13 @@ namespace MpvGui {
 
 int GuiRun(int argc, char *argv[]) {
 	int option;
-	const char *dirName;
+	const char *dirName = nullptr;
+	const char *connectorPrimaryId = nullptr;
+	const char *connectorSecondaryId = nullptr;
+	const char *audioPrimaryDevice = nullptr;
+	const char *audioSecondaryDevice = nullptr;
+	const char *macPrimaryAddress = nullptr;
+	const char *macSecondaryAddress = nullptr;
 	Display *display = nullptr;
 	std::string lastPath;
 	int lastSelection = 0;
@@ -50,17 +56,24 @@ int GuiRun(int argc, char *argv[]) {
 		return -1;
 	}
 
-	while ((option = getopt(argc, argv, ":")) != -1) {
-		switch (option) {
-		default:
-			break;
-		}
-	}
+	while ((option = getopt(argc, argv, ":")) != -1) {}
 
-	if (optind < argc) {
-	    dirName = argv[optind];
+	if (argc > 1) {
+		dirName = argv[1];
 	} else {
 		log->printf("Missing root directory parameter!\n");
+		delete log;
+		return -1;
+	}
+	if (argc > 2 && argc < 9) {
+		connectorPrimaryId = argv[2];
+		connectorSecondaryId = argv[3];
+		audioPrimaryDevice = argv[4];
+		audioSecondaryDevice = argv[5];
+		macPrimaryAddress = argv[6];
+		macSecondaryAddress = argv[7];
+	} else {
+		log->printf("Missing configuration parameters!\n");
 		delete log;
 		return -1;
 	}
@@ -83,12 +96,12 @@ int GuiRun(int argc, char *argv[]) {
 		log->printf("Failed create display!\n");
 		goto end;
 	}
-	if (display->init() == S_FAIL) {
+	if (display->init(connectorPrimaryId, connectorSecondaryId) == S_FAIL) {
 		log->printf("Failed init display!\n");
 		goto end;
 	}
 
-	if (RemoteInit() != 0) {
+	if (RemoteInit(macPrimaryAddress) != 0) {
 		log->printf("Failed init remote controller!\n");
 		goto end;
 	}
@@ -131,11 +144,20 @@ int GuiRun(int argc, char *argv[]) {
 			if (entry.type == Fs::FsEntryType::FsFile && (inputKey == 'e' || inputKey == 'p')) {
 				display->deinit();
 				RemoteClose();
-				std::string command = "mpv \"";
-				command += (char *)(fs::path(fileSystem.CurrentPath() + "/" + entry.name + "\"").c_str());
+				std::string command = "mpv";
+				if (connectorPrimaryId) {
+					command += std::string(" --drm-connector=") + connectorPrimaryId;
+				}
+				if (audioPrimaryDevice) {
+					command += std::string(" --audio-device=") + audioPrimaryDevice;
+				}
+				if (macPrimaryAddress) {
+					command += std::string(" --input-remote-mac=") + macPrimaryAddress;
+				}
+				command += std::string(" \"") + (char *)(fs::path(fileSystem.CurrentPath() + "/" + entry.name + "\"").c_str());
 				system(command.c_str());
-				display->init();
-				RemoteInit();
+				display->init(connectorPrimaryId, connectorSecondaryId);
+				RemoteInit(macPrimaryAddress);
 			}
 			guiUpdate = true;
 			break;

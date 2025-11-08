@@ -24,7 +24,7 @@
 
 namespace MpvGui {
 
-int RemoteInit();
+int RemoteInit(const char *macAddress);
 void RemoteClose();
 int RemoteRead();
 

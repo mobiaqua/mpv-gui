@@ -72,7 +72,7 @@ public:
 	DisplayDrm();
 	~DisplayDrm();
 
-	STATUS init();
+	STATUS init(const char *connectorPrimaryId, const char *connectorSecondaryId);
 	STATUS deinit();
 	void *getBufferPtr();
 	U32 getBufferWidth();
@@ -83,7 +83,7 @@ public:
 
 private:
 
-	STATUS internalInit();
+	STATUS internalInit(const char *connectorPrimaryId, const char *connectorSecondaryId);
 	void internalDeinit();
 };
 

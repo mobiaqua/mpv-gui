@@ -42,7 +42,7 @@ public:
 	Display();
 	virtual ~Display() {}
 
-	virtual STATUS init() = 0;
+	virtual STATUS init(const char *connectorPrimaryId, const char *connectorSecondaryId) = 0;
 	virtual STATUS deinit() = 0;
 	virtual void *getBufferPtr() = 0;
 	virtual U32 getBufferWidth() = 0;
