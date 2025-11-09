@@ -24,9 +24,9 @@
 
 namespace MpvGui {
 
-int RemoteInit(const char *macAddress);
+int RemoteInit(const char *macAddress, const char *macSecondAddress);
 void RemoteClose();
-int RemoteRead();
+int RemoteRead(bool &second);
 
 } // namespace
 

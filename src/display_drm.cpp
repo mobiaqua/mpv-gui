@@ -65,8 +65,10 @@ static const char *connectorNames[] = {
 
 DisplayDrm::DisplayDrm() :
 		_fd(-1), _drmResources(nullptr),
-		_oldCrtc(nullptr), _drmPlaneResources(nullptr), _connectorId(-1),
-		_crtcId(-1), _planeId(-1), _width(0), _height(0),
+		_oldCrtc(nullptr), _oldCrtc2(nullptr), _drmPlaneResources(nullptr),
+		_connectorId(-1), _connector2Id(-1),
+		_crtcId(-1), _planeId(-1), _crtc2Id(-1), _plane2Id(-1),
+		_width(0), _height(0), _width2(0), _height2(0),
 		_waitingForFlip(true),
 		_currentBuffer() {
 }
@@ -75,11 +77,21 @@ DisplayDrm::~DisplayDrm() {
 	deinit();
 }
 
-STATUS DisplayDrm::init(const char *connectorPrimaryId, const char *connectorSecondaryId) {
+STATUS DisplayDrm::init(const char *connectorId) {
 	if (_initialized)
 		return S_FAIL;
 
-	if (internalInit(connectorPrimaryId, connectorSecondaryId) == S_FAIL)
+	if (internalInit(connectorId) == S_FAIL)
+		return S_FAIL;
+
+	return S_OK;
+}
+
+STATUS DisplayDrm::init2(const char *connectorId) {
+	if (_initialized && _connector2Id != -1)
+		return S_FAIL;
+
+	if (internalInit2(connectorId) == S_FAIL)
 		return S_FAIL;
 
 	return S_OK;
@@ -122,6 +134,34 @@ U32 DisplayDrm::getBufferStride() {
 	return _frameBuffers[_currentBuffer].stride;
 }
 
+void *DisplayDrm::getBufferPtr2() {
+	if (!_initialized)
+		return nullptr;
+
+	return _frameBuffers2[_currentBuffer].ptr;
+}
+
+U32 DisplayDrm::getBufferWidth2() {
+	if (!_initialized)
+		return 0;
+
+	return _frameBuffers2[_currentBuffer].width;
+}
+
+U32 DisplayDrm::getBufferHeight2() {
+	if (!_initialized)
+		return 0;
+
+	return _frameBuffers2[_currentBuffer].height;
+}
+
+U32 DisplayDrm::getBufferStride2() {
+	if (!_initialized)
+		return 0;
+
+	return _frameBuffers2[_currentBuffer].stride;
+}
+
 static void drm_page_flip(int fd, unsigned int msc, unsigned int sec,
                           unsigned int usec, void *data) {
 	DisplayDrm *display = (DisplayDrm *)data;
@@ -129,7 +169,7 @@ static void drm_page_flip(int fd, unsigned int msc, unsigned int sec,
 	display->_waitingForFlip = false;
 }
 
-STATUS DisplayDrm::internalInit(const char *connectorPrimaryId, const char *connectorSecondaryId) {
+STATUS DisplayDrm::internalInit(const char *connectorId) {
 	drmDevice *devices[DRM_MAX_MINOR] = { 0 };
 	uint32_t handles[4] = { 0 }, pitches[4] = { 0 }, offsets[4] = { 0 };
 	struct drm_mode_create_dumb creq = { 0 };
@@ -160,30 +200,25 @@ STATUS DisplayDrm::internalInit(const char *connectorPrimaryId, const char *conn
 		goto fail;
 	}
 
-	_drmPlaneResources = drmModeGetPlaneResources(_fd);
-	if (!_drmResources) {
-		log->printf("DisplayDrm::internalInit(): Failed get DRM plane resources, %s\n", strerror(errno));
-		goto fail;
-	}
 
 	for (int i = 0; i < _drmResources->count_connectors; i++) {
 		connector = drmModeGetConnector(_fd, _drmResources->connectors[i]);
 		if (connector == nullptr)
 			continue;
-		if (connectorPrimaryId) {
+		if (connectorId) {
 			char connectorName[MAX_CONNECTOR_NAME_LEN];
 			snprintf(connectorName, MAX_CONNECTOR_NAME_LEN, "%s-%d", connectorNames[connector->connector_type], connector->connector_type_id);
-			if (strcmp(connectorName, connectorPrimaryId) == 0) {
+			if (strcmp(connectorName, connectorId) == 0) {
 				if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
 					_connectorId = connector->connector_id;
 					break;
 				}
-				continue;
 			}
-		}
-		if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
-			_connectorId = connector->connector_id;
-			break;
+		} else {
+			if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
+				_connectorId = connector->connector_id;
+				break;
+			}
 		}
 		drmModeFreeConnector(connector);
 	}
@@ -240,17 +275,18 @@ STATUS DisplayDrm::internalInit(const char *connectorPrimaryId, const char *conn
 		log->printf("DisplayDrm::internalInit(): Failed to set universal planes capability!\n");
 		goto fail;
 	}
-	_drmPlaneResources = drmModeGetPlaneResources(_fd);
-	if (!_drmPlaneResources) {
-		log->printf("DisplayDrm::internalInit(): Failed to plane resources!\n");
-		goto fail;
-	}
 
 	for (int i = 0; i < _drmResources->count_crtcs; i++) {
 		if (_drmResources->crtcs[i] == _crtcId) {
 			crtcIndex = i;
 			break;
 		}
+	}
+
+	_drmPlaneResources = drmModeGetPlaneResources(_fd);
+	if (!_drmPlaneResources) {
+		log->printf("DisplayDrm::internalInit(): Failed to plane resources!\n");
+		goto fail;
 	}
 
 	_planeId = -1;
@@ -369,6 +405,209 @@ fail:
 	return S_FAIL;
 }
 
+STATUS DisplayDrm::internalInit2(const char *connectorId) {
+	drmDevice *devices[DRM_MAX_MINOR] = { 0 };
+	uint32_t handles[4] = { 0 }, pitches[4] = { 0 }, offsets[4] = { 0 };
+	struct drm_mode_create_dumb creq = { 0 };
+	struct drm_mode_map_dumb mreq = { 0 };
+	drmModeConnectorPtr connector = nullptr;
+	drmModeObjectPropertiesPtr props;
+	int crtcIndex = -1;
+	int modeId = -1;
+	int ret;
+
+	if (_fd < 0) {
+		log->printf("DisplayDrm::internalInit2(): Failed open, %s\n", strerror(errno));
+		return S_FAIL;
+	}
+
+	for (int i = 0; i < _drmResources->count_connectors; i++) {
+		connector = drmModeGetConnector(_fd, _drmResources->connectors[i]);
+		if (connector == nullptr)
+			continue;
+		if (connectorId) {
+			char connectorName[MAX_CONNECTOR_NAME_LEN];
+			snprintf(connectorName, MAX_CONNECTOR_NAME_LEN, "%s-%d", connectorNames[connector->connector_type], connector->connector_type_id);
+			if (strcmp(connectorName, connectorId) == 0) {
+				if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
+					_connector2Id = connector->connector_id;
+					break;
+				}
+			}
+		}
+		drmModeFreeConnector(connector);
+	}
+	if (_connector2Id == -1) {
+		log->printf("DisplayDrm::internalInit2(): Failed to find connector!\n");
+		drmModeFreeConnector(connector);
+		goto fail;
+	}
+
+	for (int j = 0; j < connector->count_modes; j++) {
+		auto mode = &connector->modes[j];
+		if (mode->type & DRM_MODE_TYPE_PREFERRED) {
+			modeId = j;
+			break;
+		}
+	}
+
+	if (modeId == -1) {
+		U64 hightestArea = 0;
+		for (int j = 0; j < connector->count_modes; j++) {
+			auto mode = &connector->modes[j];
+			const U64 area = mode->hdisplay * mode->vdisplay;
+			if (area > hightestArea) {
+				hightestArea = area;
+				modeId = j;
+			}
+		}
+	}
+
+	_crtc2Id = -1;
+	for (int i = 0; i < _drmResources->count_encoders; i++) {
+		auto encoder = drmModeGetEncoder(_fd, _drmResources->encoders[i]);
+		if (!encoder) {
+			continue;
+		}
+		if (encoder->encoder_id == connector->encoder_id && encoder->crtc_id != 0) {
+			_crtc2Id = encoder->crtc_id;
+			drmModeFreeEncoder(encoder);
+			break;
+		}
+		drmModeFreeEncoder(encoder);
+	}
+
+	if (modeId == -1 || _crtc2Id == -1) {
+		log->printf("DisplayDrm::internalInit2(): Failed to find suitable display output!\n");
+		drmModeFreeConnector(connector);
+		goto fail;
+	}
+
+	_modeInfo2 = connector->modes[modeId];
+
+	drmModeFreeConnector(connector);
+
+	if (drmSetClientCap(_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
+		log->printf("DisplayDrm::internalInit2(): Failed to set universal planes capability!\n");
+		goto fail;
+	}
+
+	for (int i = 0; i < _drmResources->count_crtcs; i++) {
+		if (_drmResources->crtcs[i] == _crtc2Id) {
+			crtcIndex = i;
+			break;
+		}
+	}
+
+	_plane2Id = -1;
+	for (int i = 0; i < _drmPlaneResources->count_planes; i++) {
+		drmModePlane *plane = drmModeGetPlane(_fd, _drmPlaneResources->planes[i]);
+		if (plane == nullptr)
+			continue;
+		uint32_t possible_crtcs = plane->possible_crtcs;
+		if (possible_crtcs & (1 << crtcIndex)) {
+			drmModeObjectPropertiesPtr props = drmModeObjectGetProperties(_fd, plane->plane_id, DRM_MODE_OBJECT_PLANE);
+			if (!props) {
+				log->printf("DisplayDrm::internalInit2(): Failed to find properties for plane!\n");
+				drmModeFreePlane(plane);
+				break;
+			}
+			for (int i = 0; i < props->count_props; i++) {
+				drmModePropertyPtr prop = drmModeGetProperty(_fd, props->props[i]);
+				if (prop != nullptr && strcmp(prop->name, "type") == 0) {
+					uint64_t value = props->prop_values[i];
+					if (_plane2Id == -1 && value == DRM_PLANE_TYPE_PRIMARY) {
+						_plane2Id = plane->plane_id;
+					}
+				}
+				drmModeFreeProperty(prop);
+			}
+			drmModeFreeObjectProperties(props);
+		}
+		drmModeFreePlane(plane);
+	}
+	if (_plane2Id == -1) {
+		log->printf("DisplayDrm::internalInit2(): Failed to find plane!\n");
+		goto fail;
+	}
+
+	props = drmModeObjectGetProperties(_fd, _plane2Id, DRM_MODE_OBJECT_PLANE);
+	if (!props) {
+		log->printf("DisplayDrm::internalInit2(): Failed to find properties for plane!\n");
+		goto fail;
+	}
+	for (int i = 0; i < props->count_props; i++) {
+		drmModePropertyPtr prop = drmModeGetProperty(_fd, props->props[i]);
+		if (prop != nullptr && strcmp(prop->name, "zorder") == 0 && drm_property_type_is(prop, DRM_MODE_PROP_RANGE)) {
+			if (drmModeObjectSetProperty(_fd, _plane2Id, DRM_MODE_OBJECT_PLANE, prop->prop_id, 1)) {
+				log->printf("DisplayDrm::internalInit2(): Failed to set zorder property for plane!\n");
+				drmModeFreeProperty(prop);
+				drmModeFreeObjectProperties(props);
+				goto fail;
+			}
+		}
+		drmModeFreeProperty(prop);
+	}
+	drmModeFreeObjectProperties(props);
+
+	_width2 = _modeInfo2.hdisplay;
+	_height2 = _modeInfo2.vdisplay;
+
+	creq.height = _modeInfo2.vdisplay;
+	creq.width = _modeInfo2.hdisplay;
+	creq.bpp = 32;
+
+	for (int i = 0; i < NUM_FB; i++) {
+		if (drmIoctl(_fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+			log->printf("DisplayDrm::internalInit2(): Cannot create dumb buffer: %s\n", strerror(errno));
+			return S_FAIL;
+		}
+		handles[0] = creq.handle;
+		pitches[0] = creq.pitch;
+
+		ret = drmModeAddFB2(_fd, _modeInfo2.hdisplay, _modeInfo2.vdisplay,
+		                    DRM_FORMAT_ARGB8888,
+		                    handles, pitches, offsets, &_frameBuffers2[i].fbId, 0);
+		if (ret < 0) {
+			log->printf("DisplayDrm::internalInit2(): failed add video buffer: %s\n", strerror(errno));
+			goto fail;
+		}
+
+		mreq.handle = creq.handle;
+		if (drmIoctl(_fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq)) {
+			log->printf("DisplayDrm::internalInit2(): Cannot map dumb buffer: %s\n", strerror(errno));
+			goto fail;
+		}
+		_frameBuffers2[i].ptr = mmap(nullptr, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, _fd, mreq.offset);
+		if (_frameBuffers2[i].ptr == MAP_FAILED) {
+			log->printf("DisplayDrm::internalInit2(): Cannot map dumb buffer: %s\n", strerror(errno));
+			goto fail;
+		}
+
+		_frameBuffers2[i].width = _modeInfo2.hdisplay;
+		_frameBuffers2[i].height = _modeInfo2.vdisplay;
+		_frameBuffers2[i].stride = creq.pitch;
+		_frameBuffers2[i].size = creq.size;
+
+		memset(_frameBuffers2[i].ptr, 0, _frameBuffers2[i].size);
+	}
+
+	_oldCrtc2 = drmModeGetCrtc(_fd, _crtc2Id);
+	ret = drmModeSetCrtc(_fd, _crtc2Id, _frameBuffers2[0].fbId, 0, 0, &_connector2Id, 1, &_modeInfo2);
+	if (ret < 0) {
+		log->printf("DisplayDrm::internalInit2(): failed set crtc: %s\n", strerror(errno));
+		goto fail;
+	}
+
+	return S_OK;
+
+fail:
+
+	internalDeinit2();
+
+	return S_FAIL;
+}
+
 void DisplayDrm::internalDeinit() {
 	if (_oldCrtc) {
 		drmModeSetCrtc(_fd, _oldCrtc->crtc_id, _oldCrtc->buffer_id,
@@ -396,6 +635,8 @@ void DisplayDrm::internalDeinit() {
 		_frameBuffers[i] = { 0 };
 	}
 
+	internalDeinit2();
+
 	if (_drmPlaneResources != nullptr) {
 		drmModeFreePlaneResources(_drmPlaneResources);
 		_drmPlaneResources = nullptr;
@@ -415,6 +656,37 @@ void DisplayDrm::internalDeinit() {
 }
 
 
+void DisplayDrm::internalDeinit2() {
+	if (_oldCrtc2) {
+		drmModeSetCrtc(_fd, _oldCrtc2->crtc_id, _oldCrtc2->buffer_id,
+		               _oldCrtc2->x, _oldCrtc2->y, &_connector2Id, 1, &_oldCrtc2->mode);
+		drmModeFreeCrtc(_oldCrtc2);
+		_oldCrtc2 = nullptr;
+	}
+
+	if (_connector2Id != -1) {
+		for (int i = 0; i < NUM_FB; i++) {
+			if (_frameBuffers2[i].fbId) {
+				drmModeRmFB(_fd, _frameBuffers2[i].fbId);
+				_frameBuffers2[i].fbId = 0;
+			}
+			if (_frameBuffers2[i].ptr) {
+				munmap(_frameBuffers2[i].ptr, _frameBuffers2[i].size);
+				_frameBuffers2[i].ptr = nullptr;
+			}
+			if (_frameBuffers2[i].handle > 0) {
+				struct drm_mode_destroy_dumb dreq = {
+					.handle = _frameBuffers2[i].handle,
+				};
+				drmIoctl(_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
+				_frameBuffers2[i].handle = 0;
+			}
+			_frameBuffers2[i] = { 0 };
+		}
+		_connector2Id = -1;
+	}
+}
+
 STATUS DisplayDrm::flip() {
 	if (!_initialized)
 		return S_FAIL;
@@ -422,6 +694,13 @@ STATUS DisplayDrm::flip() {
 	if (drmModePageFlip(_fd, _crtcId, _frameBuffers[_currentBuffer].fbId, DRM_MODE_PAGE_FLIP_EVENT, this) != 0) {
 		log->printf("DisplayDrm::flip(): failed queue page flip: %s\n", strerror(errno));
 		goto fail;
+	}
+
+	if (_connector2Id != -1) {
+		if (drmModePageFlip(_fd, _crtc2Id, _frameBuffers2[_currentBuffer].fbId, DRM_MODE_PAGE_FLIP_EVENT, this) != 0) {
+			log->printf("DisplayDrm::flip(): failed queue page flip: %s\n", strerror(errno));
+			goto fail;
+		}
 	}
 
 	while (_waitingForFlip) {
@@ -449,6 +728,9 @@ fail:
 
 void DisplayDrm::clear() {
 	memset(_frameBuffers[_currentBuffer].ptr, 0, _frameBuffers[_currentBuffer].size);
+	if (_connector2Id != -1) {
+		memset(_frameBuffers2[_currentBuffer].ptr, 0, _frameBuffers2[_currentBuffer].size);
+	}
 }
 
 } // namespace

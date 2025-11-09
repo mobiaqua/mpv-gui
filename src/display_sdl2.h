@@ -49,12 +49,17 @@ public:
 	DisplaySdl2();
 	~DisplaySdl2();
 
-	STATUS init(const char *connectorPrimaryId, const char *connectorSecondaryId);
+	STATUS init(const char *connectorId);
+	STATUS init2(const char *connectorId) { return S_OK; }
 	STATUS deinit();
 	void *getBufferPtr();
 	U32 getBufferWidth();
 	U32 getBufferHeight();
 	U32 getBufferStride();
+	void *getBufferPtr2() { return nullptr; }
+	U32 getBufferWidth2() { return 0; }
+	U32 getBufferHeight2() { return 0; }
+	U32 getBufferStride2() { return 0; }
 	STATUS flip();
 	void clear();
 

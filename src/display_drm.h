@@ -52,16 +52,24 @@ private:
 	drmModeResPtr               _drmResources;
 	drmModePlaneResPtr          _drmPlaneResources;
 	drmModeCrtcPtr              _oldCrtc;
+	drmModeCrtcPtr              _oldCrtc2;
 	drmModeModeInfo             _modeInfo;
+	drmModeModeInfo             _modeInfo2;
 	drmEventContext             _flipEvent{};
 	uint32_t                    _connectorId;
+	uint32_t                    _connector2Id;
 	uint32_t                    _crtcId;
+	uint32_t                    _crtc2Id;
 	int                         _planeId;
+	int                         _plane2Id;
 
 	U32                         _width;
 	U32                         _height;
+	U32                         _width2;
+	U32                         _height2;
 
 	FrameBuffer                 _frameBuffers[NUM_FB]{};
+	FrameBuffer                 _frameBuffers2[NUM_FB]{};
 
 	int                         _currentBuffer;
 
@@ -72,19 +80,26 @@ public:
 	DisplayDrm();
 	~DisplayDrm();
 
-	STATUS init(const char *connectorPrimaryId, const char *connectorSecondaryId);
+	STATUS init(const char *connectorId);
+	STATUS init2(const char *connectorId);
 	STATUS deinit();
 	void *getBufferPtr();
 	U32 getBufferWidth();
 	U32 getBufferHeight();
 	U32 getBufferStride();
+	void *getBufferPtr2();
+	U32 getBufferWidth2();
+	U32 getBufferHeight2();
+	U32 getBufferStride2();
 	STATUS flip();
 	void clear();
 
 private:
 
-	STATUS internalInit(const char *connectorPrimaryId, const char *connectorSecondaryId);
+	STATUS internalInit(const char *connectorId);
+	STATUS internalInit2(const char *connectorId);
 	void internalDeinit();
+	void internalDeinit2();
 };
 
 } // namespace

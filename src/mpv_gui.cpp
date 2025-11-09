@@ -41,10 +41,12 @@ int GuiRun(int argc, char *argv[]) {
 	const char *audioSecondaryDevice = nullptr;
 	const char *macPrimaryAddress = nullptr;
 	const char *macSecondaryAddress = nullptr;
+	bool secondaryDisplay = false;
 	Display *display = nullptr;
 	std::string lastPath;
 	int lastSelection = 0;
 	int scale = 1;
+	int scale2 = 1;
 	std::vector<Fs::FsEntry> entries;
 	bool guiUpdate = true;
 	int selection = 0;
@@ -65,14 +67,14 @@ int GuiRun(int argc, char *argv[]) {
 		delete log;
 		return -1;
 	}
-	if (argc > 2 && argc < 9) {
+	if (argc > 2 && argc == 8) {
 		connectorPrimaryId = argv[2];
 		connectorSecondaryId = argv[3];
 		audioPrimaryDevice = argv[4];
 		audioSecondaryDevice = argv[5];
 		macPrimaryAddress = argv[6];
 		macSecondaryAddress = argv[7];
-	} else {
+	} else if (argc > 2 && argc != 8) {
 		log->printf("Missing configuration parameters!\n");
 		delete log;
 		return -1;
@@ -96,12 +98,18 @@ int GuiRun(int argc, char *argv[]) {
 		log->printf("Failed create display!\n");
 		goto end;
 	}
-	if (display->init(connectorPrimaryId, connectorSecondaryId) == S_FAIL) {
+	if (display->init(connectorPrimaryId) == S_FAIL) {
 		log->printf("Failed init display!\n");
 		goto end;
 	}
+	if (connectorSecondaryId && display->init2(connectorSecondaryId) == S_FAIL) {
+		log->printf("Failed init second display!\n");
+		secondaryDisplay = false;
+	} else {
+		secondaryDisplay = true;
+	}
 
-	if (RemoteInit(macPrimaryAddress) != 0) {
+	if (RemoteInit(macPrimaryAddress, macSecondaryAddress) != 0) {
 		log->printf("Failed init remote controller!\n");
 		goto end;
 	}
@@ -114,6 +122,9 @@ int GuiRun(int argc, char *argv[]) {
 	if (display->getBufferWidth() > 1920)
 		scale = 2;
 
+	if (display->getBufferWidth2() > 1920)
+		scale2 = 2;
+
 	if (!lastPath.empty())
 		fileSystem.EnterDirectory(lastPath);
 
@@ -122,8 +133,10 @@ int GuiRun(int argc, char *argv[]) {
 	if (entries.size() == 0) {
 		parentOffset = parentSelection = selection = lastSelection = -1;
 	}
+
 	do {
-		int inputKey = RemoteRead();
+		bool secondInput = false;
+		int inputKey = RemoteRead(secondInput);
 		switch (inputKey) {
 		case 'p':
 		case 'r':
@@ -145,20 +158,49 @@ int GuiRun(int argc, char *argv[]) {
 				display->deinit();
 				RemoteClose();
 				std::string command = "mpv";
-				if (connectorPrimaryId) {
+				if (!secondInput && connectorPrimaryId) {
 					command += std::string(" --drm-connector=") + connectorPrimaryId;
 				}
-				if (audioPrimaryDevice) {
+				if (secondInput && secondaryDisplay) {
+					command += std::string(" --drm-connector=") + connectorSecondaryId;
+				}
+				if (!secondInput && audioPrimaryDevice) {
 					command += std::string(" --audio-device=") + audioPrimaryDevice;
 				}
-				if (macPrimaryAddress) {
+				if (secondInput && audioSecondaryDevice) {
+					command += std::string(" --audio-device=") + audioSecondaryDevice;
+				}
+				if (!secondInput && macPrimaryAddress) {
 					command += std::string(" --input-remote-mac=") + macPrimaryAddress;
+				}
+				if (secondInput && macSecondaryAddress) {
+					command += std::string(" --input-remote-mac=") + macSecondaryAddress;
 				}
 				command += std::string(" \"") + (char *)(fs::path(fileSystem.CurrentPath() + "/" + entry.name + "\"").c_str());
 				system(command.c_str());
-				display->init(connectorPrimaryId, connectorSecondaryId);
-				RemoteInit(macPrimaryAddress);
+				display->init(connectorPrimaryId);
+				if (connectorSecondaryId) {
+					if (display->init2(connectorSecondaryId) == S_OK) {
+						secondaryDisplay = true;
+					} else {
+						secondaryDisplay = false;
+					}
+				}
+				RemoteInit(macPrimaryAddress, macSecondaryAddress);
 			}
+			guiUpdate = true;
+			break;
+		}
+		case 'x': {
+			display->deinit();
+			RemoteClose();
+			display->init(connectorPrimaryId);
+			if (display->init2(connectorSecondaryId) == S_OK) {
+				secondaryDisplay = true;
+			} else {
+				secondaryDisplay = false;
+			}
+			RemoteInit(macPrimaryAddress, macSecondaryAddress);
 			guiUpdate = true;
 			break;
 		}
@@ -260,7 +302,35 @@ int GuiRun(int argc, char *argv[]) {
 			                80 * scale,
 			                120 * scale,
 			                display->getBufferStride(),
-			               255, 0, 0);
+			                255, 0, 0);
+		}
+
+		if (connectorSecondaryId) {
+			FontsSetSize(50 * scale2);
+			std::string title = "--== Media Player 2 ==--";
+			FontsRenderText(title.c_str(),
+			                (U8 *)display->getBufferPtr2(),
+			                80 * scale2,
+			                80 * scale2,
+			                display->getBufferStride2(),
+			                0, 255, 0);
+
+			FontsSetSize(30 * scale2);
+			FontsRenderText(pathStr.c_str(),
+			                (U8 *)display->getBufferPtr2(),
+			                750 * scale2,
+			                80 * scale2,
+			                display->getBufferStride2(),
+			                255, 255, 0);
+
+			if (offset > 0) {
+				FontsRenderText("^^^",
+				                (U8 *)display->getBufferPtr2(),
+				                80 * scale2,
+				                120 * scale2,
+				                display->getBufferStride2(),
+				                255, 0, 0);
+			}
 		}
 
 		int num = entries.size();
@@ -275,21 +345,41 @@ int GuiRun(int argc, char *argv[]) {
 			}
 			if (selection == index)
 				pathStr += " <---";
+			FontsSetSize(30 * scale);
 			FontsRenderText(pathStr.c_str(),
 			                (U8 *)display->getBufferPtr(),
 			                80 * scale,
 			                150 * scale + (30 * scale * drawIndex),
 			                display->getBufferStride(),
 			                selection == index ? 0 : 255, 255, 255);
+			if (connectorSecondaryId) {
+				FontsSetSize(30 * scale2);
+				FontsRenderText(pathStr.c_str(),
+				                (U8 *)display->getBufferPtr2(),
+				                80 * scale2,
+				                150 * scale2 + (30 * scale2 * drawIndex),
+				                display->getBufferStride2(),
+				                selection == index ? 0 : 255, 255, 255);
+			}
 		}
 
 		if (entries.size() > 30 && (entries.size() - offset) > 30) {
+			FontsSetSize(30 * scale);
 			FontsRenderText("v v v",
 			                (U8 *)display->getBufferPtr(),
 			                80 * scale,
 			                150 * scale + (30 * scale * 30),
 			                display->getBufferStride(),
 			                255, 0, 0);
+			if (connectorSecondaryId) {
+				FontsSetSize(30 * scale2);
+				FontsRenderText("v v v",
+				                (U8 *)display->getBufferPtr2(),
+				                80 * scale2,
+				                150 * scale2 + (30 * scale2 * 30),
+				                display->getBufferStride2(),
+				                255, 0, 0);
+			}
 		}
 
 		display->flip();

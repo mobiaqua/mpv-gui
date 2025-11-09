@@ -38,7 +38,7 @@ DisplaySdl2::~DisplaySdl2() {
 	deinit();
 }
 
-STATUS DisplaySdl2::init(const char *connectorPrimaryId, const char *connectorSecondaryId) {
+STATUS DisplaySdl2::init(const char *connectorId) {
 	if (_initialized)
 		return S_FAIL;
 

@@ -57,10 +57,16 @@ enum remoteType {
 
 static enum remoteType remote;
 static const char *remoteMac;
+static const char *remoteSecondMac;
 
 struct mapping {
 	int linuxKeycode;
 	int key;
+};
+
+struct InputEvent {
+	struct input_event event;
+	bool secondRemote;
 };
 
 static const struct mapping PS3RemoteMapping[] = {
@@ -70,6 +76,7 @@ static const struct mapping PS3RemoteMapping[] = {
 	{ KEY_RIGHT,         'r'  },
 	{ KEY_DOWN,          'd'  },
 	{ KEY_PLAY,          'p'  },
+	{ KEY_BACK,          'x'  },
 	{ -1,                 -1  }
 };
 
@@ -96,31 +103,34 @@ static int lookupButtonKey(struct input_event *ev) {
 	int i;
 
 	switch (remote) {
-	case REMOTE_PS3_BD: {
-		for (i = 0; PS3RemoteMapping[i].linuxKeycode != -1; i++) {
-			if (PS3RemoteMapping[i].linuxKeycode == ev->code) {
-				return PS3RemoteMapping[i].key;
+		case REMOTE_PS3_BD: {
+			for (i = 0; PS3RemoteMapping[i].linuxKeycode != -1; i++) {
+				if (PS3RemoteMapping[i].linuxKeycode == ev->code) {
+					return PS3RemoteMapping[i].key;
+				}
 			}
+			break;
 		}
-		break;
-	}
-	case REMOTE_SATECHI_R2: {
-		for (i = 0; R2RemoteMapping[i].linuxKeycode != -1; i++) {
-			if (R2RemoteMapping[i].linuxKeycode == ev->code) {
-				return R2RemoteMapping[i].key;
+
+		case REMOTE_SATECHI_R2: {
+			for (i = 0; R2RemoteMapping[i].linuxKeycode != -1; i++) {
+				if (R2RemoteMapping[i].linuxKeycode == ev->code) {
+					return R2RemoteMapping[i].key;
+				}
 			}
+			break;
 		}
-		break;
-	}
 	}
 
 	return -1;
 }
 
-static int scanRemote() {
+static void scanRemote(int &firstFd, int &secondFd) {
 	int i, fd;
 
-	// look for a valid PS3 BD Remote device on system
+	firstFd = secondFd = -1;
+
+	// look for a valid remote device on the system
 	for (i = 0; i < EVDEV_MAX_EVENTS; i++) {
 		struct input_id id;
 		char file[64];
@@ -133,19 +143,31 @@ static int scanRemote() {
 
 		if (ioctl(fd, EVIOCGID, &id) != -1 && id.bustype == BUS_BLUETOOTH) {
 			if (id.vendor == USB_VENDOR_PS3REMOTE && id.product == USB_DEVICE_PS3REMOTE) {
-				if (remoteMac && ioctl(fd, EVIOCGUNIQ(sizeof(device_name) - 1), &device_name) > 0) {
-					if (strncasecmp(device_name, remoteMac, sizeof(device_name)) != 0) {
-						continue;
+				if (remoteMac || remoteSecondMac) {
+					if (ioctl(fd, EVIOCGUNIQ(sizeof(device_name) - 1), &device_name) > 0) {
+						if (strncasecmp(device_name, remoteMac, sizeof(device_name)) == 0) {
+							remote = REMOTE_PS3_BD;
+							firstFd = fd;
+							continue;
+						}
+						if (strncasecmp(device_name, remoteSecondMac, sizeof(device_name)) == 0) {
+							remote = REMOTE_PS3_BD;
+							secondFd = fd;
+							continue;
+						}
 					}
+				} else {
+					remote = REMOTE_PS3_BD;
+					firstFd = fd;
+					return;
 				}
-				remote = REMOTE_PS3_BD;
-				return fd;
 			}
 			if (id.vendor == USB_VENDOR_R2REMOTE && id.product == USB_DEVICE_R2REMOTE) {
 				if (ioctl(fd, EVIOCGNAME(sizeof(device_name) - 1), &device_name) > 0) {
 					if (strncmp(device_name, "R2 Remote Keyboard", sizeof(device_name)) == 0) {
 						remote = REMOTE_SATECHI_R2;
-						return fd;
+						firstFd = fd;
+						return;
 					}
 				}
 			}
@@ -153,20 +175,18 @@ static int scanRemote() {
 			close (fd);
 		}
 	}
-
-	return -1;
 }
 
 static void *threadRemote(void *ptr) {
 	struct thread_priv_ *priv = static_cast<struct thread_priv_ *>(ptr);
 	int inotifyFd = -1, inotifyWd = -1;
-	int inputFd, readInput, writeOutput;
+	int inputFd, input2Fd, readInput, writeOutput;
 	char buf[1000];
 	fd_set set;
 	struct timeval timeout;
-	struct input_event event;
+	struct InputEvent event;
 
-	inputFd = scanRemote();
+	scanRemote(inputFd, input2Fd);
 
 	inotifyFd = inotify_init();
 	if (inotifyFd < 0) {
@@ -190,21 +210,43 @@ static void *threadRemote(void *ptr) {
 			read(inotifyFd, buf, 1000);
 			if (inputFd != -1)
 				close(inputFd);
-			inputFd = scanRemote();
+			if (input2Fd != -1)
+				close(input2Fd);
+			scanRemote(inputFd, input2Fd);
 		}
 
 		while (inputFd != -1) {
-			readInput = read(inputFd, &event, sizeof (struct input_event));
+			readInput = read(inputFd, &event, sizeof(struct input_event));
 			if (readInput < 0 && errno != EAGAIN) {
 				close(inputFd);
 				inputFd = -1;
 				break;
 			}
-			if (readInput < static_cast<int>(sizeof (struct input_event))) {
+			if (readInput < static_cast<int>(sizeof(struct input_event))) {
 				break;
 			}
-			writeOutput = write(threadPriv.fd[1], &event, sizeof (struct input_event));
-			if (writeOutput != sizeof (struct input_event)) {
+			event.secondRemote = false;
+			writeOutput = write(threadPriv.fd[1], &event, sizeof(struct InputEvent));
+			if (writeOutput != sizeof (struct InputEvent)) {
+				log->printf("Couldn't write to output pipe\n");
+				break;
+			}
+		}
+
+		while (input2Fd != -1) {
+			event.secondRemote = true;
+			readInput = read(input2Fd, &event, sizeof(struct input_event));
+			if (readInput < 0 && errno != EAGAIN) {
+				close(input2Fd);
+				input2Fd = -1;
+				break;
+			}
+			if (readInput < static_cast<int>(sizeof(struct input_event))) {
+				break;
+			}
+			event.secondRemote = true;
+			writeOutput = write(threadPriv.fd[1], &event, sizeof(struct InputEvent));
+			if (writeOutput != sizeof (struct InputEvent)) {
 				log->printf("Couldn't write to output pipe\n");
 				break;
 			}
@@ -220,16 +262,19 @@ exit:
 		close(inotifyFd);
 	if (inputFd != -1)
 		close(inputFd);
+	if (input2Fd != -1)
+		close(input2Fd);
 
 	threadExited = 1;
 	return NULL;
 }
 
-int RemoteInit(const char *macAddress) {
+int RemoteInit(const char *macAddress, const char *macSecondAddress) {
 	threadExit = 0;
 	threadExited = 0;
 
 	remoteMac = macAddress;
+	remoteSecondMac = macSecondAddress;
 
 	if (pipe(threadPriv.fd) != 0) {
 		return -1;
@@ -269,28 +314,30 @@ void RemoteClose() {
 	threadExited = 0;
 }
 
-int RemoteRead() {
-	struct input_event ev;
+int RemoteRead(bool &second) {
+	struct InputEvent ev;
 	int i, r;
 
 	if (!initialized || remoteFd == -1)
 		return -1;
 
-	r = read(remoteFd, &ev, sizeof (struct input_event));
-	if (r <= 0 || r < sizeof (struct input_event))
+	r = read(remoteFd, &ev, sizeof(struct InputEvent));
+	if (r <= 0 || r < sizeof(struct InputEvent))
 		return -1;
 
 	// check for key press only
-	if (ev.type != EV_KEY)
+	if (ev.event.type != EV_KEY)
 		return -1;
 
 	// EvDev Key values:
 	// 0: key release
 	// 1: key press
-	if (ev.value == 0)
+	if (ev.event.value == 0)
 		return -1;
 
-	return lookupButtonKey(&ev);
+	int key = lookupButtonKey(&ev.event);
+	second = ev.secondRemote;
+	return key;
 }
 
 } // namespace
@@ -301,14 +348,14 @@ int RemoteRead() {
 
 namespace MpvGui {
 
-int RemoteInit(const char *macAddress) {
+int RemoteInit(const char *macAddress, const char *macSecondAddress) {
 	return 0;
 }
 
 void RemoteClose() {
 }
 
-int RemoteRead() {
+int RemoteRead(bool &second) {
 	SDL_Event event;
 
 	if (!SDL_PollEvent(&event)) {

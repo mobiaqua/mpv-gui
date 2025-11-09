@@ -40,7 +40,7 @@ Fs::Fs(std::string path) {
 		curl_global_init(CURL_GLOBAL_DEFAULT);
 		curl = curl_easy_init();
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteFunction);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &curlBuffer);
 		if (path.back() == '/')
